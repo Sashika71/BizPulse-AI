@@ -1,0 +1,6 @@
+crewai==0.80.0
+setuptools<81
+yfinance==0.2.40
+feedparser==6.0.11
+python-dotenv==1.0.1
+requests==2.31.0
