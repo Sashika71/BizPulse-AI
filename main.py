@@ -1,5 +1,6 @@
 import smtplib
 import time
+from html import escape
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -8,6 +9,33 @@ from litellm.exceptions import ServiceUnavailableError
 from src.agent import create_bizpulse_crew
 from src.config import Config
 from src.scraper import fetch_business_rss_news, fetch_market_rates
+
+
+def build_fallback_briefing(rates, raw_news):
+    """Build a plain fallback briefing when Gemini is unavailable."""
+    plain_text = (
+        "BizPulse Daily Executive Briefing (Fallback)\n\n"
+        "Gemini is temporarily unavailable. Sharing raw market snapshot and headlines.\n\n"
+        "Market Snapshot\n"
+        f"- USD to LKR Rate: {rates.get('USD_LKR', 'N/A')}\n"
+        f"- Gold Price: {rates.get('Gold_Price_USD', 'N/A')}\n"
+        f"- CSE Market Index: {rates.get('CSE_Index', 'N/A')}\n\n"
+        "Business Headlines\n"
+        f"{raw_news or 'No headlines available.'}\n"
+    )
+    html_content = (
+        "<h2>BizPulse Daily Executive Briefing (Fallback)</h2>"
+        "<p>Gemini is temporarily unavailable. Sharing raw market snapshot and headlines.</p>"
+        "<h3>Market Snapshot</h3>"
+        "<ul>"
+        f"<li>USD to LKR Rate: {escape(str(rates.get('USD_LKR', 'N/A')))}</li>"
+        f"<li>Gold Price: {escape(str(rates.get('Gold_Price_USD', 'N/A')))}</li>"
+        f"<li>CSE Market Index: {escape(str(rates.get('CSE_Index', 'N/A')))}</li>"
+        "</ul>"
+        "<h3>Business Headlines</h3>"
+        f"<pre>{escape(raw_news or 'No headlines available.')}</pre>"
+    )
+    return html_content, plain_text
 
 
 def send_email(html_content, plain_text="", recipients=None):
@@ -70,23 +98,30 @@ def main():
 
     print("Creating the executive briefing with CrewAI...")
     crew = create_bizpulse_crew(rates, raw_news)
+    fallback_briefing = None
     for attempt in range(3):
         try:
             result = crew.kickoff()
             break
         except ServiceUnavailableError as exc:
             if attempt == 2:
-                raise RuntimeError(
+                print(
                     "Gemini is temporarily unavailable after 3 attempts. "
-                    "Please wait and run the command again."
-                ) from exc
+                    "Sending fallback briefing."
+                )
+                fallback_briefing = build_fallback_briefing(rates, raw_news)
+                break
             delay = 2**attempt
             print(f"Gemini is busy; retrying in {delay} seconds...")
             time.sleep(delay)
-    briefing = getattr(result, "raw", str(result))
+    if fallback_briefing:
+        briefing, plain_text = fallback_briefing
+    else:
+        briefing = getattr(result, "raw", str(result))
+        plain_text = briefing
 
     print("Sending the briefing email...")
-    send_email(briefing, plain_text=briefing)
+    send_email(briefing, plain_text=plain_text)
     print("BizPulse briefing completed successfully.")
 
 
